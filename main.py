@@ -1,17 +1,21 @@
-import requests
 from time import sleep
 from bot import Bot
+import requests
 from db import Database
 import json
+from OpenRouteCalulator import OpenRouteService
 
-db = Database("localhost", "root", "", "db_Gbenz")
-
+db = Database("localhost", "root", "", "db_gbenz")
+api_key = "5b3ce3597851110001cf6248d4639689dc324dd99903138944658a5e"
+ors = OpenRouteService(api_key)
 ENDPOINT = f'https://api.telegram.org/bot/6855019928:AAEwiBxbXooXcCHReh2NvEmgMXma7bjwpUI/'
 bot = Bot("6855019928:AAEwiBxbXooXcCHReh2NvEmgMXma7bjwpUI")
 
 last_update_id = 0
 
 user_info = ["","","","","",""]  # 0: chat_id, 1: user_id, 2: nome, 3: tipocarburante, 4: capacita, 5: maxkm
+lat=0
+lon=0
 
 def main():
     print("STARTING...")
@@ -71,11 +75,12 @@ def startBotChat():
         query = "SELECT * FROM user WHERE UserID = " + str(userid)
         result = db.esegui_query(query) # 0: chat_id, 1: user_id, 2: nome, 3: tipocarburante, 4: capacita, 5: maxkm
         print (result)
-        user_info[1] = result[0][0]
-        user_info[2] = result[0][1]
-        user_info[3] = result[0][2]
-        user_info[4] = result[0][3]
-        user_info[5] = result[0][4]
+        user_info[0] = result[0][0]
+        user_info[1] = result[0][1]
+        user_info[2] = result[0][2]
+        user_info[3] = result[0][3]
+        user_info[4] = result[0][4]
+        user_info[5] = result[0][5]
         bot.send_message(user_info[0], 'Welcome Back, ' + str(user_info[2]))
         print(user_info)   
 
@@ -85,7 +90,7 @@ def ChangeInfo():
     
     getInfo()
     
-    query = "UPDATE user SET Nome = '" + str(user_info[2]) + "', TipoCarburante = '" + str(user_info[3]) + "', Capacita = " + str(user_info[4]) + ", MaxKM = " + str(user_info[5]) + " WHERE ChatID = " + str(user_info[1])
+    query = "UPDATE user SET Nome = '" + str(user_info[2]) + "', TipoCarburante = '" + str(user_info[3]) + "', Capacita = " + str(user_info[4]) + ", MaxKM = " + str(user_info[5]) + " WHERE ChatID = " + str(user_info[0])
     db.esegui_query(query)
     
 
@@ -97,8 +102,10 @@ def findGasolineStat():
     bot.send_message(user_info[0], 'Insert your location: ')
 
     data = getResponse()
-    Lat = data['result'][0]['message']['location']['latitude']
-    Lon = data['result'][0]['message']['location']['longitude']
+    global lat
+    lat = data['result'][0]['message']['location']['latitude']
+    global lon
+    lon = data['result'][0]['message']['location']['longitude']
 
     bot.send_message(user_info[0], 'Nearest gas station or cheapest gas station?')
     sendKeyboard(user_info[0], ['nearest', 'cheapest'])
@@ -109,37 +116,42 @@ def findGasolineStat():
     sendKeyboard(user_info[0], ['only 1/4', 'half', '3/4', 'full'])
     data = getResponse()
     quantita = data['result'][0]['message']['text']
-    
+    print(typeStation)
     if typeStation == 'nearest':
-        query = "SELECT * FROM anagrafica ORDER BY SQRT(POW(Latitudine - " + str(Lat) + ", 2) + POW(Longitudine - " + str(Lon) + ", 2)) ASC LIMIT 10"
+        query = "SELECT * FROM anagrafica ORDER BY SQRT(POW(Latitudine - " + str(lat) + ", 2) + POW(Longitudine - " + str(lon) + ", 2)) ASC LIMIT 10"
         result = db.esegui_query(query)
         bot.send_message(user_info[0], 'The nearest gas stations are: ')
         for i in range(9):
             bot.send_message(user_info[0], '/n/r' + str(result[i][4]) + ' ' + str(result[i][5]) + ', ' + str(result[i][6]) + ', ' + str(result[i][7]) + ', ' + str(result[i][8]))
             
+    
     elif typeStation == 'cheapest':
-        #TODO: calcolo del prezzo migliore
-        query = f"SELECT a.nome, a.indirizzo, a.comune, a.latitudine, a.longitudine, p.TipoCarburante, p.prezzo FROM anagrafica as a JOIN prezzi as p ON a.ID = p.IDImpianto WHERE p.TipoCarburante = '"+ user_info[3] + "' AND p.isSelf = 1 ORDER BY SQRT(POW(a.Latitudine - " + str(Lat) + ", 2) + POW(a.Longitudine - " + str(Lon) + ", 2)) ASC ";
-        result = db.esegui_query(query)
+    # Calculate the cheapest gas stations within the specified maximum distance
+     print("User info:", user_info[3])
+     query = f"SELECT a.nome, a.indirizzo, a.comune, a.latitudine, a.longitudine, p.TipoCarburante, p.prezzo FROM anagrafica as a JOIN prezzi as p ON a.ID = p.IDImpianto WHERE p.TipoCarburante = '{user_info[3]}' AND p.isSelf = 1 ORDER BY p.prezzo ASC"
+     result = db.esegui_query(query)
+     best_prezzo_stations = []
+     for station in result:
+         start_coordinates = [lat, lon]
+         end_coordinates = [station[3], station[4]]
+         route_data = ors.get_route(start_coordinates, end_coordinates)
+         print(route_data)
+         if route_data:
+            distance = route_data['features'][0]['properties']['segments'][0]['distance']
+            print("Distance:", distance)
+            if distance <= float(user_info[5]):  # Check if the distance is within the user's maximum distance
+                best_prezzo_stations.append((station, distance))
 
-        headers = {
-            'Accept': 'application/json, application/geo+json, application/gpx+xml, img/png; charset=utf-8',
-        }        
-        bestPrezzo = result[0][6]
-        indexBestPrezzo = 0
-        count = 0
-        api_key = open("./docs/token_directions.txt", "r").read()
-        for i in range(len(result)):
-            if result[i][6] < bestPrezzo:
-                latStation = result[i][3]
-                lonStation = result[i][4]
-                bestPrezzo = result[i][6]
-                indexBestPrezzo = i
-                count+=1
+     # Sort the stations by price
+     best_prezzo_stations.sort(key=lambda x: x[0][6])
 
-        
-        
-        bot.send_message(user_info[0], "Station Name: " + str(result[indexBestPrezzo][0]) + "\nAddress: " + str(result[indexBestPrezzo][1]) + "\nCity: " + str(result[indexBestPrezzo][2]) + "\nPrice: " + str(result[indexBestPrezzo][6]) + "\nFuel Type: " + str(result[indexBestPrezzo][5]))
+     # Display the information of the cheapest station
+     if best_prezzo_stations:
+        station_info, distance = best_prezzo_stations[0]
+        bot.send_message(user_info[0], "Station Name: " + str(station_info[0]) + "\nAddress: " + str(station_info[1]) + "\nCity: " + str(station_info[2]) + "\nPrice: " + str(station_info[6]) + "\nFuel Type: " + str(station_info[5]) + "\nDistance: " + str(distance) + " meters")
+     else:
+        bot.send_message(user_info[0], "No gas stations found within the specified maximum distance.")
+
     
         
 def getInfo():
@@ -153,7 +165,7 @@ def getInfo():
     
     bot.send_message(user_info[0], 'Insert the type of fuel you use(Benzina/Metano/GPL/Gasolio/Blue Super/Blue Diesel...): ')
     data = getResponse()
-    user_info[3] = data['result'][0]['message']['text'].tolower()
+    user_info[3] = data['result'][0]['message']['text']
     
     bot.send_message(user_info[0], 'Insert the capacity of your tank: ')
     data = getResponse()
