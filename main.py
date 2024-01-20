@@ -134,12 +134,12 @@ def findGasolineStat():
      for station in result:
          start_coordinates = [lat, lon]
          end_coordinates = [station[3], station[4]]
-         route_data = ors.get_route(start_coordinates, end_coordinates)
+         route_data = ors.get_route_length(start_coordinates, end_coordinates)
          print(route_data)
          if route_data:
-            distance = route_data['features'][0]['properties']['segments'][0]['distance']
+            distance = route_data
             print("Distance:", distance)
-            if distance <= float(user_info[5]):  # Check if the distance is within the user's maximum distance
+            if distance <= float(user_info[5]*1000):  # Check if the distance is within the user's maximum distance
                 best_prezzo_stations.append((station, distance))
 
      # Sort the stations by price
